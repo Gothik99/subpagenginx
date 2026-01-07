@@ -43,10 +43,44 @@ else
 fi
 info "Порт subpage: $SUBPAGE_PORT"
 
+# Функция ожидания освобождения блокировки dpkg
+wait_for_dpkg_lock() {
+    local max_wait=300  # Максимальное время ожидания (5 минут)
+    local waited=0
+    
+    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+          fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+          lsof /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+          lsof /var/lib/dpkg/lock >/dev/null 2>&1; do
+        if [ $waited -ge $max_wait ]; then
+            error "Превышено время ожидания освобождения блокировки dpkg"
+            error "Попробуйте запустить скрипт позже или завершите процесс обновления вручную:"
+            echo "  sudo killall unattended-upgr"
+            echo "  sudo rm /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock"
+            exit 1
+        fi
+        
+        if [ $waited -eq 0 ]; then
+            warn "Обнаружен активный процесс обновления системы, ожидаю завершения..."
+        fi
+        
+        sleep 5
+        waited=$((waited + 5))
+        echo -n "."
+    done
+    
+    if [ $waited -gt 0 ]; then
+        echo ""
+        info "Блокировка освобождена, продолжаю установку..."
+    fi
+}
+
 # Проверка наличия nginx
 if ! command -v nginx &> /dev/null; then
     info "Установка nginx..."
+    wait_for_dpkg_lock
     apt-get update
+    wait_for_dpkg_lock
     apt-get install -y nginx
     info "nginx установлен"
 else
@@ -134,7 +168,9 @@ info "nginx успешно настроен и запущен"
 # Установка certbot для получения SSL сертификата
 info "Установка certbot для получения SSL сертификата..."
 if ! command -v certbot &> /dev/null; then
+    wait_for_dpkg_lock
     apt-get update
+    wait_for_dpkg_lock
     apt-get install -y certbot python3-certbot-nginx
     info "certbot установлен"
 else
@@ -250,4 +286,3 @@ echo "  Статус: systemctl status nginx"
 echo "  Логи: tail -f /var/log/nginx/subpage-error.log"
 echo "  Обновление SSL: certbot renew"
 echo ""
-
